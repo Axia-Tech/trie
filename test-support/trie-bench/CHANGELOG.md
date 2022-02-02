@@ -6,9 +6,6 @@ The format is based on [Keep a Changelog].
 
 ## [Unreleased]
 
-## [0.29.0] - 2021-10-19
-- Updated memory-db, triedb and trie-root. [#142](https://github.com/axia-tech/trie/pull/142)
-
 ## [0.28.0] - 2021-07-02
 - Updated memory-db to 0.27. [#139](https://github.com/axia-tech/trie/pull/139)
 - Updated axia-scale-codec to 2.0. [#137](https://github.com/axia-tech/trie/pull/137)

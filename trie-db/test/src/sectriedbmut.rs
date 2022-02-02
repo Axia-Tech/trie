@@ -12,19 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+use memory_db::{MemoryDB, HashKey};
 use hash_db::Hasher;
-use memory_db::{HashKey, MemoryDB};
-use reference_trie::{RefHasher, RefSecTrieDBMut, RefTrieDB};
+use keccak_hasher::KeccakHasher;
+use reference_trie::{RefTrieDB, RefSecTrieDBMut};
 use trie_db::{DBValue, Trie, TrieMut};
 
 #[test]
 fn sectrie_to_trie() {
-	let mut memdb = MemoryDB::<RefHasher, HashKey<_>, DBValue>::default();
+	let mut memdb = MemoryDB::<KeccakHasher, HashKey<_>, DBValue>::default();
 	let mut root = Default::default();
 	{
 		let mut t = RefSecTrieDBMut::new(&mut memdb, &mut root);
 		t.insert(&[0x01u8, 0x23], &[0x01u8, 0x23]).unwrap();
 	}
 	let t = RefTrieDB::new(&memdb, &root).unwrap();
-	assert_eq!(t.get(&RefHasher::hash(&[0x01u8, 0x23])).unwrap().unwrap(), vec![0x01u8, 0x23],);
+	assert_eq!(
+		t.get(&KeccakHasher::hash(&[0x01u8, 0x23])).unwrap().unwrap(),
+		vec![0x01u8, 0x23],
+	);
 }

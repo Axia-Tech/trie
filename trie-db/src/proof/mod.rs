@@ -30,10 +30,8 @@
 //! and the hashes of other reconstructed nodes. Since the nodes in the proof are arranged in
 //! pre-order traversal order, the construction can be done efficiently using a stack.
 
-pub use self::{
-	generate::generate_proof,
-	verify::{verify_proof, Error as VerifyError},
-};
+pub use self::generate::generate_proof;
+pub use self::verify::{Error as VerifyError, verify_proof};
 
 mod generate;
 mod verify;

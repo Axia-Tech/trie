@@ -1,4 +1,4 @@
-// Copyright 2017, 2021 AXIA Technologies
+// Copyright 2017, 2018 AXIA Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,12 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(not(feature = "std"))]
-use core::hash;
 #[cfg(feature = "std")]
 use std::fmt::Debug;
 #[cfg(feature = "std")]
 use std::hash;
+#[cfg(not(feature = "std"))]
+use core::hash;
 
 #[cfg(feature = "std")]
 pub trait MaybeDebug: Debug {}
@@ -32,6 +32,7 @@ pub trait MaybeDebug {}
 #[cfg(not(feature = "std"))]
 impl<T> MaybeDebug for T {}
 
+
 /// A trie node prefix, it is the nibble path from the trie root
 /// to the trie node.
 /// For a node containing no partial key value it is the full key.
@@ -40,7 +41,7 @@ impl<T> MaybeDebug for T {}
 /// Therefore it is always the leftmost portion of the node key, so its internal representation
 /// is a non expanded byte slice followed by a last padded byte representation.
 /// The padded byte is an optional padded value.
-pub type Prefix<'a> = (&'a [u8], Option<u8>);
+pub type Prefix<'a> = (&'a[u8], Option<u8>);
 
 /// An empty prefix constant.
 /// Can be use when the prefix is not use internally
@@ -52,17 +53,8 @@ pub static EMPTY_PREFIX: Prefix<'static> = (&[], None);
 /// `Out` associated type with the necessary bounds.
 pub trait Hasher: Sync + Send {
 	/// The output type of the `Hasher`
-	type Out: AsRef<[u8]>
-		+ AsMut<[u8]>
-		+ Default
-		+ MaybeDebug
-		+ PartialEq
-		+ Eq
-		+ hash::Hash
-		+ Send
-		+ Sync
-		+ Clone
-		+ Copy;
+	type Out: AsRef<[u8]> + AsMut<[u8]> + Default + MaybeDebug + PartialEq + Eq
+		+ hash::Hash + Send + Sync + Clone + Copy;
 	/// What to use to build `HashMap`s with this `Hasher`.
 	type StdHasher: Sync + Send + Default + hash::Hasher;
 	/// The length in bytes of the `Hasher` output.
@@ -106,21 +98,13 @@ pub trait PlainDBRef<K, V> {
 }
 
 impl<'a, K, V> PlainDBRef<K, V> for &'a dyn PlainDB<K, V> {
-	fn get(&self, key: &K) -> Option<V> {
-		PlainDB::get(*self, key)
-	}
-	fn contains(&self, key: &K) -> bool {
-		PlainDB::contains(*self, key)
-	}
+	fn get(&self, key: &K) -> Option<V> { PlainDB::get(*self, key) }
+	fn contains(&self, key: &K) -> bool { PlainDB::contains(*self, key) }
 }
 
 impl<'a, K, V> PlainDBRef<K, V> for &'a mut dyn PlainDB<K, V> {
-	fn get(&self, key: &K) -> Option<V> {
-		PlainDB::get(*self, key)
-	}
-	fn contains(&self, key: &K) -> bool {
-		PlainDB::contains(*self, key)
-	}
+	fn get(&self, key: &K) -> Option<V> { PlainDB::get(*self, key) }
+	fn contains(&self, key: &K) -> bool { PlainDB::contains(*self, key) }
 }
 
 /// Trait modelling datastore keyed by a hash defined by the `Hasher`.
@@ -157,18 +141,14 @@ pub trait HashDBRef<H: Hasher, T> {
 }
 
 impl<'a, H: Hasher, T> HashDBRef<H, T> for &'a dyn HashDB<H, T> {
-	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
-		HashDB::get(*self, key, prefix)
-	}
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> { HashDB::get(*self, key, prefix) }
 	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
 		HashDB::contains(*self, key, prefix)
 	}
 }
 
 impl<'a, H: Hasher, T> HashDBRef<H, T> for &'a mut dyn HashDB<H, T> {
-	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
-		HashDB::get(*self, key, prefix)
-	}
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> { HashDB::get(*self, key, prefix) }
 	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
 		HashDB::contains(*self, key, prefix)
 	}
@@ -196,20 +176,12 @@ pub trait AsPlainDB<K, V> {
 // This means we need concrete impls of AsHashDB in several places, which somewhat defeats
 // the point of the trait.
 impl<'a, H: Hasher, T> AsHashDB<H, T> for &'a mut dyn HashDB<H, T> {
-	fn as_hash_db(&self) -> &dyn HashDB<H, T> {
-		&**self
-	}
-	fn as_hash_db_mut<'b>(&'b mut self) -> &'b mut (dyn HashDB<H, T> + 'b) {
-		&mut **self
-	}
+	fn as_hash_db(&self) -> &dyn HashDB<H, T> { &**self }
+	fn as_hash_db_mut<'b>(&'b mut self) -> &'b mut (dyn HashDB<H, T> + 'b) { &mut **self }
 }
 
 #[cfg(feature = "std")]
 impl<'a, K, V> AsPlainDB<K, V> for &'a mut dyn PlainDB<K, V> {
-	fn as_plain_db(&self) -> &dyn PlainDB<K, V> {
-		&**self
-	}
-	fn as_plain_db_mut<'b>(&'b mut self) -> &'b mut (dyn PlainDB<K, V> + 'b) {
-		&mut **self
-	}
+	fn as_plain_db(&self) -> &dyn PlainDB<K, V> { &**self }
+	fn as_plain_db_mut<'b>(&'b mut self) -> &'b mut (dyn PlainDB<K, V> + 'b) { &mut **self }
 }

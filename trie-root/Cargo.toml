@@ -1,6 +1,6 @@
 [package]
 name = "trie-root"
-version = "0.17.0"
+version = "0.16.0"
 authors = ["AXIA Technologies <admin@axiacoin.network>"]
 description = "In-memory patricia trie operations"
 repository = "https://github.com/axia-tech/trie"

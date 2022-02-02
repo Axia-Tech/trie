@@ -14,14 +14,12 @@
 
 //! Trie lookup via HashDB.
 
-use super::{CError, DBValue, Query, Result, TrieError, TrieHash, TrieLayout};
-use crate::{
-	nibble::NibbleSlice,
-	node::{decode_hash, Node, NodeHandle, Value},
-	node_codec::NodeCodec,
-	rstd::boxed::Box,
-};
-use hash_db::{HashDBRef, Prefix};
+use hash_db::HashDBRef;
+use crate::nibble::NibbleSlice;
+use crate::node::{Node, NodeHandle, decode_hash};
+use crate::node_codec::NodeCodec;
+use crate::rstd::boxed::Box;
+use super::{DBValue, Result, TrieError, Query, TrieLayout, CError, TrieHash};
 
 /// Trie lookup helper object.
 pub struct Lookup<'a, L: TrieLayout, Q: Query<L::Hash>> {
@@ -38,48 +36,24 @@ where
 	L: TrieLayout,
 	Q: Query<L::Hash>,
 {
-	fn decode(
-		mut self,
-		v: Value,
-		prefix: Prefix,
-		depth: u32,
-	) -> Result<Q::Item, TrieHash<L>, CError<L>> {
-		match v {
-			Value::Inline(value) => Ok(self.query.decode(value)),
-			Value::Node(_, Some(value)) => Ok(self.query.decode(value.as_slice())),
-			Value::Node(hash, None) => {
-				let mut res = TrieHash::<L>::default();
-				res.as_mut().copy_from_slice(hash);
-				if let Some(value) = self.db.get(&res, prefix) {
-					self.query.record(&res, &value, depth);
-					Ok(self.query.decode(value.as_slice()))
-				} else {
-					Err(Box::new(TrieError::IncompleteDatabase(res)))
-				}
-			},
-		}
-	}
-
 	/// Look up the given key. If the value is found, it will be passed to the given
 	/// function to decode or copy.
-	pub fn look_up(mut self, key: NibbleSlice) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+	pub fn look_up(
+		mut self,
+		key: NibbleSlice,
+	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
 		let mut partial = key;
+		let mut hash = self.hash;
 		let mut key_nibbles = 0;
-
-		let mut full_key = key.clone();
-		full_key.advance(key.len());
-		let full_key = full_key.left();
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
-			let hash = self.hash;
 			let node_data = match self.db.get(&hash, key.mid(key_nibbles).left()) {
 				Some(value) => value,
-				None =>
-					return Err(Box::new(match depth {
-						0 => TrieError::InvalidStateRoot(hash),
-						_ => TrieError::IncompleteDatabase(hash),
-					})),
+				None => return Err(Box::new(match depth {
+					0 => TrieError::InvalidStateRoot(hash),
+					_ => TrieError::IncompleteDatabase(hash),
+				})),
 			};
 
 			self.query.record(&hash, &node_data, depth);
@@ -90,37 +64,36 @@ where
 			loop {
 				let decoded = match L::Codec::decode(node_data) {
 					Ok(node) => node,
-					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+					Err(e) => {
+						return Err(Box::new(TrieError::DecoderError(hash, e)))
+					}
 				};
 				let next_node = match decoded {
-					Node::Leaf(slice, value) =>
+					Node::Leaf(slice, value) => {
 						return Ok(match slice == partial {
-							true => Some(self.decode(value, full_key, depth)?),
+							true => Some(self.query.decode(value)),
 							false => None,
-						}),
-					Node::Extension(slice, item) =>
+						})
+					}
+					Node::Extension(slice, item) => {
 						if partial.starts_with(&slice) {
 							partial = partial.mid(slice.len());
 							key_nibbles += slice.len();
 							item
 						} else {
 							return Ok(None)
-						},
+						}
+					}
 					Node::Branch(children, value) => match partial.is_empty() {
-						true =>
-							if let Some(value) = value {
-								return Ok(Some(self.decode(value, full_key, depth)?))
-							} else {
-								return Ok(None)
-							},
+						true => return Ok(value.map(move |val| self.query.decode(val))),
 						false => match children[partial.at(0) as usize] {
 							Some(x) => {
 								partial = partial.mid(1);
 								key_nibbles += 1;
 								x
-							},
-							None => return Ok(None),
-						},
+							}
+							None => return Ok(None)
+						}
 					},
 					Node::NibbledBranch(slice, children, value) => {
 						if !partial.starts_with(&slice) {
@@ -128,20 +101,15 @@ where
 						}
 
 						match partial.len() == slice.len() {
-							true =>
-								if let Some(value) = value {
-									return Ok(Some(self.decode(value, full_key, depth)?))
-								} else {
-									return Ok(None)
-								},
+							true => return Ok(value.map(move |val| self.query.decode(val))),
 							false => match children[partial.at(slice.len()) as usize] {
 								Some(x) => {
 									partial = partial.mid(slice.len() + 1);
 									key_nibbles += slice.len() + 1;
 									x
-								},
-								None => return Ok(None),
-							},
+								}
+								None => return Ok(None)
+							}
 						}
 					},
 					Node::Empty => return Ok(None),
@@ -150,9 +118,9 @@ where
 				// check if new node data is inline or hash.
 				match next_node {
 					NodeHandle::Hash(data) => {
-						self.hash = decode_hash::<L::Hash>(data)
+						hash = decode_hash::<L::Hash>(data)
 							.ok_or_else(|| Box::new(TrieError::InvalidHash(hash, data.to_vec())))?;
-						break
+						break;
 					},
 					NodeHandle::Inline(data) => {
 						node_data = data;

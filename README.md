@@ -1,4 +1,4 @@
-[![Build Status](https://github.com/axia-tech/trie/actions/workflows/rust.yml/badge.svg)](https://github.com/axia-tech/trie/actions)
+[![Build Status](https://travis-ci.com/axia-tech/trie.svg?branch=master)](https://travis-ci.com/axia-tech/trie)
 # Trie
 
 A generic implementation of the Base-16 Modified Merkle Tree ("Trie") data structure,

@@ -6,9 +6,6 @@ The format is based on [Keep a Changelog].
 
 ## [Unreleased]
 
-## [0.23.0] - 2021-10-19
-- Support for value nodes. [#142](https://github.com/axia-tech/trie/pull/142)
-
 ## [0.22.6] - 2021-07-02
 - Updated `hashbrown` to 0.11. [#131](https://github.com/axia-tech/trie/pull/131)
 

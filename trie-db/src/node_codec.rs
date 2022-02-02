@@ -15,42 +15,27 @@
 //! Generic trait for trie node encoding/decoding. Takes a `hash_db::Hasher`
 //! to parametrize the hashes used in the codec.
 
-use crate::{
-	node::{Node, NodePlan, Value},
-	ChildReference, MaybeDebug,
-};
+use crate::MaybeDebug;
+use crate::node::{Node, NodePlan};
+use crate::ChildReference;
 
-use crate::rstd::{borrow::Borrow, hash, vec::Vec, Error};
+use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec};
+
 
 /// Representation of a nible slice (right aligned).
 /// It contains a right aligned padded first byte (first pair element is the number of nibbles
 /// (0 to max nb nibble - 1), second pair element is the padded nibble), and a slice over
 /// the remaining bytes.
-pub type Partial<'a> = ((u8, u8), &'a [u8]);
+pub type Partial<'a> = ((u8, u8), &'a[u8]);
 
 /// Trait for trie node encoding/decoding.
-/// Uses a type parameter to allow registering
-/// positions without colling decode plan.
 pub trait NodeCodec: Sized {
-	/// Escape header byte sequence to indicate next node is a
-	/// branch or leaf with hash of value, followed by the value node.
-	const ESCAPE_HEADER: Option<u8> = None;
-
 	/// Codec error type.
 	type Error: Error;
 
 	/// Output type of encoded node hasher.
-	type HashOut: AsRef<[u8]>
-		+ AsMut<[u8]>
-		+ Default
-		+ MaybeDebug
-		+ PartialEq
-		+ Eq
-		+ hash::Hash
-		+ Send
-		+ Sync
-		+ Clone
-		+ Copy;
+	type HashOut: AsRef<[u8]> + AsMut<[u8]> + Default + MaybeDebug + PartialEq + Eq
+		+ hash::Hash + Send + Sync + Clone + Copy;
 
 	/// Get the hashed null node.
 	fn hashed_null_node() -> Self::HashOut;
@@ -59,7 +44,7 @@ pub trait NodeCodec: Sized {
 	fn decode_plan(data: &[u8]) -> Result<NodePlan, Self::Error>;
 
 	/// Decode bytes to a `Node`. Returns `Self::E` on failure.
-	fn decode<'a>(data: &'a [u8]) -> Result<Node<'a>, Self::Error> {
+	fn decode(data: &[u8]) -> Result<Node, Self::Error> {
 		Ok(Self::decode_plan(data)?.build(data))
 	}
 
@@ -70,7 +55,7 @@ pub trait NodeCodec: Sized {
 	fn empty_node() -> &'static [u8];
 
 	/// Returns an encoded leaf node
-	fn leaf_node(partial: Partial, value: Value) -> Vec<u8>;
+	fn leaf_node(partial: Partial, value: &[u8]) -> Vec<u8>;
 
 	/// Returns an encoded extension node
 	/// Note that number_nibble is the number of element of the iterator
@@ -86,7 +71,7 @@ pub trait NodeCodec: Sized {
 	/// Takes an iterator yielding `ChildReference<Self::HashOut>` and an optional value.
 	fn branch_node(
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
-		value: Option<Value>,
+		value: Option<&[u8]>,
 	) -> Vec<u8>;
 
 	/// Returns an encoded branch node with a possible partial path.
@@ -95,6 +80,6 @@ pub trait NodeCodec: Sized {
 		partial: impl Iterator<Item = u8>,
 		number_nibble: usize,
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
-		value: Option<Value>,
+		value: Option<&[u8]>
 	) -> Vec<u8>;
 }

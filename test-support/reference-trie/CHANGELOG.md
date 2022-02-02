@@ -6,9 +6,6 @@ The format is based on [Keep a Changelog].
 
 ## [Unreleased]
 
-## [0.24.0] - 2021-10-19
-- Additional test codec substrate like. [#142](https://github.com/axia-tech/trie/pull/142)
-
 ## [0.23.0] - 2021-01-27
 - Update axia-scale-codec to 2.0.
 

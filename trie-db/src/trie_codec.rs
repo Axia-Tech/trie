@@ -1,4 +1,4 @@
-// Copyright 2019, 2021 AXIA Technologies
+// Copyright 2019, 2020 AXIA Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,27 +25,25 @@
 //! expected to save roughly (n - 1) hashes in size where n is the number of nodes in the partial
 //! trie.
 
+use hash_db::HashDB;
 use crate::{
-	nibble_ops::NIBBLE_LENGTH,
-	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
-	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, result, vec, vec::Vec},
-	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBNodeIterator,
-	TrieError, TrieHash, TrieLayout,
+	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result,
+	TrieHash, TrieError, TrieDB, TrieDBNodeIterator, TrieLayout,
+	nibble_ops::NIBBLE_LENGTH, node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode},
 };
-use hash_db::{HashDB, Prefix};
+use crate::rstd::{
+	boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, result, vec, vec::Vec,
+};
 
 struct EncoderStackEntry<C: NodeCodec> {
 	/// The prefix is the nibble path to the node in the trie.
 	prefix: NibbleVec,
-	/// Node in memory content.
 	node: Rc<OwnedNode<DBValue>>,
 	/// The next entry in the stack is a child of the preceding entry at this index. For branch
 	/// nodes, the index is in [0, NIBBLE_LENGTH] and for extension nodes, the index is in [0, 1].
 	child_index: usize,
 	/// Flags indicating whether each child is omitted in the encoded node.
 	omit_children: Vec<bool>,
-	/// Skip value if value node is after.
-	omit_value: bool,
 	/// The encoding of the subtrie nodes rooted at this entry, which is built up in
 	/// `encode_compact`.
 	output_index: usize,
@@ -61,88 +59,71 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 	/// Preconditions:
 	/// - self.prefix + partial must be a prefix of child_prefix.
 	/// - if self.node is a branch, then child_prefix must be longer than self.prefix + partial.
-	fn advance_child_index(
-		&mut self,
-		child_prefix: &NibbleVec,
-	) -> result::Result<(), &'static str> {
+	fn advance_child_index(&mut self, child_prefix: &NibbleVec)
+		-> result::Result<(), &'static str>
+	{
 		match self.node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } =>
 				return Err("empty and leaf nodes have no children"),
-			NodePlan::Extension { .. } =>
+			NodePlan::Extension { .. } => {
 				if self.child_index != 0 {
 					return Err("extension node cannot have multiple children")
-				},
+				}
+			}
 			NodePlan::Branch { .. } => {
 				if child_prefix.len() <= self.prefix.len() {
-					return Err("child_prefix does not contain prefix")
+					return Err("child_prefix does not contain prefix");
 				}
 				let child_index = child_prefix.at(self.prefix.len()) as usize;
 				if child_index < self.child_index {
-					return Err("iterator returned children in non-ascending order by prefix")
+					return Err("iterator returned children in non-ascending order by prefix");
 				}
 				self.child_index = child_index;
-			},
+			}
 			NodePlan::NibbledBranch { partial, .. } => {
 				if child_prefix.len() <= self.prefix.len() + partial.len() {
-					return Err("child_prefix does not contain prefix and node partial")
+					return Err("child_prefix does not contain prefix and node partial");
 				}
 				let child_index = child_prefix.at(self.prefix.len() + partial.len()) as usize;
 				if child_index < self.child_index {
-					return Err("iterator returned children in non-ascending order by prefix")
+					return Err("iterator returned children in non-ascending order by prefix");
 				}
 				self.child_index = child_index;
-			},
+			}
 		}
 		Ok(())
 	}
 
 	/// Generates the encoding of the subtrie rooted at this entry.
-	fn encode_node(&mut self) -> Result<Vec<u8>, C::HashOut, C::Error> {
+	fn encode_node(&self) -> Result<Vec<u8>, C::HashOut, C::Error> {
 		let node_data = self.node.data();
-		let mut modified_node_plan;
-		let node_plan = if self.omit_value {
-			modified_node_plan = self.node.node_plan().clone();
-			if let Some(value) = modified_node_plan.value_plan_mut() {
-				// 0 length value.
-				*value = ValuePlan::Inline(0..0);
-			}
-			&modified_node_plan
-		} else {
-			self.node.node_plan()
-		};
-		let mut encoded = match node_plan {
+		Ok(match self.node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } => node_data.to_vec(),
-			NodePlan::Extension { partial, child: _ } =>
+			NodePlan::Extension { partial, child: _ } => {
 				if !self.omit_children[0] {
 					node_data.to_vec()
 				} else {
 					let partial = partial.build(node_data);
 					let empty_child = ChildReference::Inline(C::HashOut::default(), 0);
 					C::extension_node(partial.right_iter(), partial.len(), empty_child)
-				},
-			NodePlan::Branch { value, children } => C::branch_node(
-				Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
-				value.as_ref().map(|v| v.build(node_data)),
-			),
+				}
+			}
+			NodePlan::Branch { value, children } => {
+				C::branch_node(
+					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
+					value.clone().map(|range| &node_data[range])
+				)
+			}
 			NodePlan::NibbledBranch { partial, value, children } => {
 				let partial = partial.build(node_data);
 				C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
-					value.as_ref().map(|v| v.build(node_data)),
+					value.clone().map(|range| &node_data[range])
 				)
-			},
-		};
-
-		if self.omit_value {
-			if let Some(header) = C::ESCAPE_HEADER {
-				encoded.insert(0, header);
-			} else {
-				return Err(Box::new(TrieError::InvalidStateRoot(Default::default())))
 			}
-		}
-		Ok(encoded)
+		})
 	}
 
 	/// Generate the list of child references for a branch node with certain children omitted.
@@ -154,16 +135,20 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 		node_data: &[u8],
 		child_handles: &[Option<NodeHandlePlan>; NIBBLE_LENGTH],
 		omit_children: &[bool],
-	) -> Result<[Option<ChildReference<C::HashOut>>; NIBBLE_LENGTH], C::HashOut, C::Error> {
+	) -> Result<[Option<ChildReference<C::HashOut>>; NIBBLE_LENGTH], C::HashOut, C::Error>
+	{
 		let empty_child = ChildReference::Inline(C::HashOut::default(), 0);
 		let mut children = [None; NIBBLE_LENGTH];
 		for i in 0..NIBBLE_LENGTH {
 			children[i] = if omit_children[i] {
 				Some(empty_child)
 			} else if let Some(child_plan) = &child_handles[i] {
-				let child_ref = child_plan.build(node_data).try_into().map_err(|hash| {
-					Box::new(TrieError::InvalidHash(C::HashOut::default(), hash))
-				})?;
+				let child_ref = child_plan
+					.build(node_data)
+					.try_into()
+					.map_err(|hash| Box::new(
+						TrieError::InvalidHash(C::HashOut::default(), hash)
+					))?;
 				Some(child_ref)
 			} else {
 				None
@@ -171,30 +156,6 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 		}
 		Ok(children)
 	}
-}
-
-/// Dettached value if included does write a reserved header,
-/// followed by node encoded with 0 length value and the value
-/// as a standalone vec.
-fn detached_value<L: TrieLayout>(
-	value: &ValuePlan,
-	node_data: &[u8],
-	node_prefix: Prefix,
-	val_fetcher: &TrieDBNodeIterator<L>,
-) -> Option<Vec<u8>> {
-	let fetched;
-	match value {
-		ValuePlan::Node(hash_plan) => {
-			if let Some(value) = val_fetcher.fetch_value(&node_data[hash_plan.clone()], node_prefix)
-			{
-				fetched = value;
-			} else {
-				return None
-			}
-		},
-		_ => return None,
-	}
-	Some(fetched)
 }
 
 /// Generates a compact representation of the partial trie stored in the given DB. The encoding
@@ -205,8 +166,8 @@ fn detached_value<L: TrieLayout>(
 /// This function makes the assumption that all child references in an inline trie node are inline
 /// references.
 pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CError<L>>
-where
-	L: TrieLayout,
+	where
+		L: TrieLayout
 {
 	let mut output = Vec::new();
 
@@ -218,19 +179,19 @@ where
 	// - It yields at least one node.
 	// - The first node yielded is the root node with an empty prefix and is not inline.
 	// - The prefixes yielded are in strictly increasing lexographic order.
-	let mut iter = TrieDBNodeIterator::new(db)?;
+	let iter = TrieDBNodeIterator::new(db)?;
 
 	// Following from the guarantees about TrieDBNodeIterator, we guarantee that after the first
 	// iteration of the loop below, the stack always has at least one entry and the bottom (front)
 	// of the stack is the root node, which is not inline. Furthermore, the iterator is not empty,
 	// so at least one iteration always occurs.
-	while let Some(item) = iter.next() {
+	for item in iter {
 		match item {
 			Ok((prefix, node_hash, node)) => {
 				// Skip inline nodes, as they cannot contain hash references to other nodes by
 				// assumption.
 				if node_hash.is_none() {
-					continue
+					continue;
 				}
 
 				// Unwind the stack until the new entry is a child of the last entry on the stack.
@@ -241,60 +202,48 @@ where
 					if prefix.starts_with(&last_entry.prefix) {
 						// advance_child_index preconditions are satisfied because of iterator
 						// correctness.
-						last_entry.advance_child_index(&prefix).expect(
-							"all errors from advance_child_index indicate bugs with \
-								TrieDBNodeIterator or this function",
-						);
+						last_entry.advance_child_index(&prefix)
+							.expect(
+								"all errors from advance_child_index indicate bugs with \
+								TrieDBNodeIterator or this function"
+							);
 						last_entry.omit_children[last_entry.child_index] = true;
 						last_entry.child_index += 1;
 						stack.push(last_entry);
-						break
+						break;
 					} else {
 						output[last_entry.output_index] = last_entry.encode_node()?;
 					}
 				}
 
-				let (children_len, detached_value) = match node.node_plan() {
-					NodePlan::Empty => (0, None),
-					NodePlan::Leaf { value, .. } =>
-						(0, detached_value(value, node.data(), prefix.as_prefix(), &iter)),
-					NodePlan::Extension { .. } => (1, None),
-					NodePlan::NibbledBranch { value: Some(value), .. } |
-					NodePlan::Branch { value: Some(value), .. } => (
-						NIBBLE_LENGTH,
-						detached_value(value, node.data(), prefix.as_prefix(), &iter),
-					),
-					NodePlan::NibbledBranch { value: None, .. } |
-					NodePlan::Branch { value: None, .. } => (NIBBLE_LENGTH, None),
+				let children_len = match node.node_plan() {
+					NodePlan::Empty | NodePlan::Leaf { .. } => 0,
+					NodePlan::Extension { .. } => 1,
+					NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => NIBBLE_LENGTH,
 				};
-
 				stack.push(EncoderStackEntry {
 					prefix,
 					node,
 					child_index: 0,
 					omit_children: vec![false; children_len],
-					omit_value: detached_value.is_some(),
 					output_index: output.len(),
 					_marker: PhantomData::default(),
 				});
 				// Insert a placeholder into output which will be replaced when this new entry is
 				// popped from the stack.
 				output.push(Vec::new());
-				if let Some(value) = detached_value {
-					output.push(value);
-				}
-			},
+			}
 			Err(err) => match *err {
 				// If we hit an IncompleteDatabaseError, just ignore it and continue encoding the
 				// incomplete trie. This encoding must support partial tries, which can be used for
 				// space-efficient storage proofs.
 				TrieError::IncompleteDatabase(_) => {},
 				_ => return Err(err),
-			},
+			}
 		}
 	}
 
-	while let Some(mut entry) = stack.pop() {
+	while let Some(entry) = stack.pop() {
 		output[entry.output_index] = entry.encode_node()?;
 	}
 
@@ -308,8 +257,6 @@ struct DecoderStackEntry<'a, C: NodeCodec> {
 	child_index: usize,
 	/// The reconstructed child references.
 	children: Vec<Option<ChildReference<C::HashOut>>>,
-	/// A value attached as a node. The node will need to use its hash as value.
-	attached_value: Option<&'a [u8]>,
 	_marker: PhantomData<C>,
 }
 
@@ -326,32 +273,36 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 		match self.node {
 			Node::Extension(_, child) if self.child_index == 0 => {
 				match child {
-					NodeHandle::Inline(data) if data.is_empty() => return Ok(false),
+					NodeHandle::Inline(data) if data.is_empty() =>
+						return Ok(false),
 					_ => {
-						let child_ref = child.try_into().map_err(|hash| {
-							Box::new(TrieError::InvalidHash(C::HashOut::default(), hash))
-						})?;
+						let child_ref = child.try_into()
+							.map_err(|hash| Box::new(
+								TrieError::InvalidHash(C::HashOut::default(), hash)
+							))?;
 						self.children[self.child_index] = Some(child_ref);
-					},
+					}
 				}
 				self.child_index += 1;
-			},
+			}
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
 				while self.child_index < NIBBLE_LENGTH {
 					match children[self.child_index] {
-						Some(NodeHandle::Inline(data)) if data.is_empty() => return Ok(false),
+						Some(NodeHandle::Inline(data)) if data.is_empty() =>
+							return Ok(false),
 						Some(child) => {
-							let child_ref = child.try_into().map_err(|hash| {
-								Box::new(TrieError::InvalidHash(C::HashOut::default(), hash))
-							})?;
+							let child_ref = child.try_into()
+								.map_err(|hash| Box::new(
+									TrieError::InvalidHash(C::HashOut::default(), hash)
+								))?;
 							self.children[self.child_index] = Some(child_ref);
-						},
-						None => {},
+						}
+						None => {}
 					}
 					self.child_index += 1;
 				}
-			},
-			_ => {},
+			}
+			_ => {}
 		}
 		Ok(true)
 	}
@@ -360,17 +311,17 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 	/// prefix.
 	fn push_to_prefix(&self, prefix: &mut NibbleVec) {
 		match self.node {
-			Node::Empty => {},
+			Node::Empty => {}
 			Node::Leaf(partial, _) | Node::Extension(partial, _) => {
 				prefix.append_partial(partial.right());
-			},
+			}
 			Node::Branch(_, _) => {
 				prefix.push(self.child_index as u8);
-			},
+			}
 			Node::NibbledBranch(partial, _, _) => {
 				prefix.append_partial(partial.right());
 				prefix.push(self.child_index as u8);
-			},
+			}
 		}
 	}
 
@@ -378,17 +329,17 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 	/// prefix.
 	fn pop_from_prefix(&self, prefix: &mut NibbleVec) {
 		match self.node {
-			Node::Empty => {},
+			Node::Empty => {}
 			Node::Leaf(partial, _) | Node::Extension(partial, _) => {
 				prefix.drop_lasts(partial.len());
-			},
+			}
 			Node::Branch(_, _) => {
 				prefix.pop();
-			},
+			}
 			Node::NibbledBranch(partial, _, _) => {
 				prefix.pop();
 				prefix.drop_lasts(partial.len());
-			},
+			}
 		}
 	}
 
@@ -396,27 +347,28 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 	///
 	/// Preconditions:
 	/// - if node is an extension node, then `children[0]` is Some.
-	fn encode_node(self, attached_hash: Option<&[u8]>) -> Vec<u8> {
-		let attached_hash = attached_hash.map(|h| crate::node::Value::Node(h, None));
+	fn encode_node(self) -> Vec<u8> {
 		match self.node {
-			Node::Empty => C::empty_node().to_vec(),
+			Node::Empty =>
+				C::empty_node().to_vec(),
 			Node::Leaf(partial, value) =>
-				C::leaf_node(partial.right(), attached_hash.unwrap_or(value)),
-			Node::Extension(partial, _) => C::extension_node(
-				partial.right_iter(),
-				partial.len(),
-				self.children[0].expect("required by method precondition; qed"),
-			),
-			Node::Branch(_, value) => C::branch_node(
-				self.children.into_iter(),
-				if attached_hash.is_some() { attached_hash } else { value },
-			),
-			Node::NibbledBranch(partial, _, value) => C::branch_node_nibbled(
-				partial.right_iter(),
-				partial.len(),
-				self.children.iter(),
-				if attached_hash.is_some() { attached_hash } else { value },
-			),
+				C::leaf_node(partial.right(), value),
+			Node::Extension(partial, _) =>
+				C::extension_node(
+					partial.right_iter(),
+					partial.len(),
+					self.children[0]
+						.expect("required by method precondition; qed"),
+				),
+			Node::Branch(_, value) =>
+				C::branch_node(self.children.into_iter(), value),
+			Node::NibbledBranch(partial, _, value) =>
+				C::branch_node_nibbled(
+					partial.right_iter(),
+					partial.len(),
+					self.children.iter(),
+					value,
+				),
 		}
 	}
 }
@@ -433,26 +385,22 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 //
 /// This function makes the assumption that all child references in an inline trie node are inline
 /// references.
-pub fn decode_compact<L, DB>(
-	db: &mut DB,
-	encoded: &[Vec<u8>],
-) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
-where
-	L: TrieLayout,
-	DB: HashDB<L::Hash, DBValue>,
+pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
+	-> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
+	where
+		L: TrieLayout,
+		DB: HashDB<L::Hash, T>,
 {
-	decode_compact_from_iter::<L, DB, _>(db, encoded.iter().map(Vec::as_slice))
+	decode_compact_from_iter::<L, DB, T, _>(db, encoded.iter().map(Vec::as_slice))
 }
 
 /// Variant of 'decode_compact' that accept an iterator of encoded nodes as input.
-pub fn decode_compact_from_iter<'a, L, DB, I>(
-	db: &mut DB,
-	encoded: I,
-) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
-where
-	L: TrieLayout,
-	DB: HashDB<L::Hash, DBValue>,
-	I: IntoIterator<Item = &'a [u8]>,
+pub fn decode_compact_from_iter<'a, L, DB, T, I>(db: &mut DB, encoded: I)
+	-> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
+	where
+		L: TrieLayout,
+		DB: HashDB<L::Hash, T>,
+		I: IntoIterator<Item = &'a [u8]>,
 {
 	// The stack of nodes through a path in the trie. Each entry is a child node of the preceding
 	// entry.
@@ -461,15 +409,8 @@ where
 	// The prefix of the next item to be read from the slice of encoded items.
 	let mut prefix = NibbleVec::new();
 
-	let mut iter = encoded.into_iter().enumerate();
-	while let Some((i, encoded_node)) = iter.next() {
-		let mut attached_node = 0;
-		if let Some(header) = L::Codec::ESCAPE_HEADER {
-			if encoded_node.starts_with(&[header]) {
-				attached_node = 1;
-			}
-		}
-		let node = L::Codec::decode(&encoded_node[attached_node..])
+	for (i, encoded_node) in encoded.into_iter().enumerate() {
+		let node = L::Codec::decode(encoded_node)
 			.map_err(|err| Box::new(TrieError::DecoderError(<TrieHash<L>>::default(), err)))?;
 
 		let children_len = match node {
@@ -481,42 +422,29 @@ where
 			node,
 			child_index: 0,
 			children: vec![None; children_len],
-			attached_value: None,
 			_marker: PhantomData::default(),
 		};
-
-		if attached_node > 0 {
-			// Read value
-			if let Some((_, fetched_value)) = iter.next() {
-				last_entry.attached_value = Some(fetched_value);
-			} else {
-				return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())))
-			}
-		}
 
 		loop {
 			if !last_entry.advance_child_index()? {
 				last_entry.push_to_prefix(&mut prefix);
 				stack.push(last_entry);
-				break
+				break;
 			}
 
 			// Since `advance_child_index` returned true, the preconditions for `encode_node` are
 			// satisfied.
-			let hash = last_entry
-				.attached_value
-				.as_ref()
-				.map(|value| db.insert(prefix.as_prefix(), value));
-			let node_data = last_entry.encode_node(hash.as_ref().map(|h| h.as_ref()));
+			let node_data = last_entry.encode_node();
 			let node_hash = db.insert(prefix.as_prefix(), node_data.as_ref());
 
 			if let Some(entry) = stack.pop() {
 				last_entry = entry;
 				last_entry.pop_from_prefix(&mut prefix);
-				last_entry.children[last_entry.child_index] = Some(ChildReference::Hash(node_hash));
+				last_entry.children[last_entry.child_index] =
+					Some(ChildReference::Hash(node_hash));
 				last_entry.child_index += 1;
 			} else {
-				return Ok((node_hash, i + 1))
+				return Ok((node_hash, i + 1));
 			}
 		}
 	}
